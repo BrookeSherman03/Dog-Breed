@@ -47,5 +47,5 @@ test <- master[train == 1]
 train <- subset(train, select = -c(train))
 test <- subset(test, select = -c(train))
 
-fwrite(newtrain, "./Midterm_Project/volume/data/interim/train.csv")
-fwrite(newtest, "./Midterm_Project/volume/data/interim/test.csv")
+fwrite(train, "./Midterm_Project/volume/data/interim/train.csv")
+fwrite(test, "./Midterm_Project/volume/data/interim/test.csv")
