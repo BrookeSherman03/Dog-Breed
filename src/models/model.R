@@ -6,51 +6,54 @@ library(caret)
 library(glmnet)
 
 #read files back in
-newtrain <- fread("./Midterm_Project/volume/data/interim/newtrain.csv")
-newtest <- fread("./Midterm_Project/volume/data/interim/newtest.csv")
+train <- fread("./Midterm_Project/volume/data/interim/train.csv")
+test <- fread("./Midterm_Project/volume/data/interim/test.csv")
 
 #store test sample_id column and drop both sample_id columns back out
-idtest <- newtest$sample_id
-newtrain <- subset(newtrain, select = -c(sample_id))
-newtest <- subset(newtest, select = -c(sample_id))
+train_y <- train$ic50_Omicron
+sample_id <- test$sample_id
+train <- subset(train, select = -c(sample_id))
+test <- subset(test, select = -c(sample_id))
 
 #dummyVars operation
-dummies <- dummyVars(ic50_Omicron ~ ., data = newtrain)
+dummies <- dummyVars(ic50_Omicron ~ ., data = train)
 saveRDS(dummies, "./Midterm_Project/volume/models/dummies")
-train <- predict(dummies, newdata = newtrain)
-test <- predict(dummies, newdata = newtest)
+train <- predict(dummies, newdata = train)
+test <- predict(dummies, newdata = test)
 
 #save data back in datatables
 train <- data.table(train)
 test <- data.table(test)
 
-#only train has this column, so add to test data for accuracy with the value needed
-train <- subset(train, select = -c(dose_3mRNA1272))
+#add this column, since test does not have it
+test$dose_3mRNA1272 <- 0
+test <- test %>% relocate(dose_3mRNA1272, .after = dose_3BNT162b2)
 
-#create crossvalidation model w/ lasso poisson regression
-cvfit <- cv.glmnet(data.matrix(train), train_y, alpha = 1, family = "poisson", type.measure = 'mse')
+#cross validation model
+cvfit <- cv.glmnet(data.matrix(train), train_y, alpha = 1, family = "gaussian", type.measure = 'mse')
 saveRDS(cvfit, "./Midterm_Project/volume/models/cvfit")
-
-#print out cv model to see values
-print(cvfit)
-predict(cvfit,s = cvfit$lambda.min, newx = test,type = "coefficients")
-
-#save min
 bestlam <- cvfit$lambda.min
 
-#create logistic  w/ lasso poisson regression
-gl_model1 <- glmnet(data.matrix(train), train_y, alpha = 1, family = "poisson")
-saveRDS(gl_model1, "./Midterm_Project/volume/models/gl_model1")
+#create model
+gl_model <- glmnet(data.matrix(train), train_y, alpha = 1, family = "gaussian")
+saveRDS(gl_model, "./Midterm_Project/volume/models/cvfit")
 
-#create prediction and print to see if the values look valid
-pred <- predict(gl_model1,s = bestlam, newx = data.matrix(test), type = "response")
-print(pred)
+#predict with train and test the similarity between columns
+predtrain <- predict(gl_model, s = bestlam, newx = data.matrix(train))
+predtrain <- abs(predtrain) #numbers should not be negative, so make any negative positive
+#show train prediction mse
+sqrt(mean((train_y - predtrain)^2))
+#compare numbers as needed
+compare <- data.table(predtrain)
+compare$acttrain <- train_y
+
+#create actual prediction
+pred <- predict(gl_model, s = bestlam, newx = data.matrix(test))
+pred <- abs(pred) #numbers should not be negative, so make any negative positive
 
 #create submission file
-test$ic50_Omicron <- pred
-submission <- data.table(idtest)
-submission <- submission %>% rename_at('idtest', ~'sample_id')
-submission$ic50_Omicron <- test$ic50_Omicron
+submission <- data.table(sample_id)
+submission$ic50_Omicron <- pred
 
 #write submission csv
-fwrite(submission, "./Midterm_Project/volume/data/processed/sub1.csv")
+fwrite(submission, "./Midterm_Project/volume/data/processed/submission.csv")
