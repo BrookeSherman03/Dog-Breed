@@ -6,9 +6,9 @@ library(caret)
 library(xgboost)
 
 #read in libraries
-train <- fread("./Stat_380_train.csv")
-test <- fread("./Stat_380_test.csv")
-covar <- fread("./covar_data.csv")
+train <- fread("./XGboost/volume/data/raw/Stat_380_train.csv")
+test <- fread("./XGboost/volume/data/raw/Stat_380_test.csv")
+covar <- fread("./XGboost/volume/data/raw/covar_data.csv")
 
 #prep for data to come together
 train <- train[order(age, days_sinceDose3, ic50_Omicron)]
@@ -43,5 +43,5 @@ test <- master[train == 1]
 train <- subset(train, select = -c(train, sample_id))
 test <- subset(test, select = -c(train, sample_id))
 
-fwrite(train, "./Midterm_Project/volume/data/interim/train.csv")
-fwrite(test, "./Midterm_Project/volume/data/interim/test.csv")
+fwrite(train, "./XGboost/volume/data/interim/train.csv")
+fwrite(test, "./XGboost/volume/data/interim/test.csv")
