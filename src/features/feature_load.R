@@ -1,51 +1,48 @@
-#load libraries
+#load libraries in
 library(data.table)
 library(dplyr)
 library(Metrics)
 library(caret)
-library(glmnet)
+library(xgboost)
 
-#load data
-train <- fread("./Midterm_Project/volume/data/raw/Stat_380_train.csv")
-test <- fread("./Midterm_Project/volume/data/raw/Stat_380_test.csv")
-covar <- fread("./Midterm_Project/volume/data/raw/covar_data.csv")
+#read in libraries
+train <- fread("./Stat_380_train.csv")
+test <- fread("./Stat_380_test.csv")
+covar <- fread("./covar_data.csv")
+sub <- fread("./Example_sub.csv")
 
 #prep for data to come together
+train <- train[order(age, days_sinceDose3, ic50_Omicron)]
 test$ic50_Omicron <- 0
 test$train <- 1
 train$train <- 0
 
 #combine data
-master <- rbind(test, train)
+master <- rbind(train, test)
+master$sort_col <- 1:nrow(master)
 
-#feature engineering
-master$days_sinceDose3 <- abs(master$days_sinceDose3)
-master$days_sincePosTest_latest <- abs(master$days_sincePosTest_latest)
-master$days_sinceSxLatest <- abs(master$days_sinceSxLatest)
-master$days_sinceDose3[is.na(master$days_sinceDose3)] <- mean(master$days_sinceDose3, na.rm = TRUE)
-master$Sx_severity_most_recent[is.na(master$Sx_severity_most_recent)] <- mean(master$Sx_severity_most_recent, na.rm = TRUE)
-master$days_dose23interval[is.na(master$days_dose23interval)] <- mean(master$days_dose23interval, na.rm = TRUE)
-master$days_sinceSxLatest[is.na(master$days_sinceSxLatest)] <- max(master$days_sinceSxLatest, na.rm = TRUE) + 1
-master$days_sincePosTest_latest[is.na(master$days_sincePosTest_latest)] <- mean(master$days_sincePosTest_latest, na.rm = TRUE)
+#utilize covar data
+id <- covar$sample_id
+newcovar <- subset(covar, select = -c(sample_id))
+total <- data.table(rowMeans(newcovar)) #use rowMeans to get average of each row
+total$sample_id <- id
 
-#new column creation
-master$days_sinceDose1 <- abs((master$days_sinceDose2 - master$days_dose12interval))
-master$muldose3interval <- (master$days_dose23interval * master$days_sinceDose3)
-master$muldose2interval <- (master$days_dose12interval * master$days_sinceDose2)
-master$agemul_avginterval <- ((master$days_dose12interval + master$days_dose23interval)/2) * master$age
-master$Posmul_Sxlatest <- master$days_sinceSxLatest * master$days_sincePosTest_latest
-master$muldoseinterval <- (master$muldose2interval * master$muldose3interval)
-master$mulSx <- master$Sx_severity_most_recent * master$days_sinceSxLatest
-master$Agemuldays_sinceDoses <- master$age * (master$days_sinceDose1 + master$days_sinceDose2 + master$days_sinceDose3)
-master$posmuldays_sinceDoses <- master$days_sincePosTest_latest * (master$days_sinceDose1 + master$days_sinceDose2 + master$days_sinceDose3)
-master$Sxmuldays_sinceDoses <- master$mulSx * (master$days_sinceDose1 + master$days_sinceDose2 + master$days_sinceDose3)
+#add covar data into master
+master <- merge(x = master, y = total, by = 'sample_id')
+
+#add new column
+master$days_sinceDose1 <- master$days_sinceDose2 + master$days_dose12interval
+
+master <- master[order(sort_col)]
+master$sort_col <- NULL
 
 #separate into train and test
 train <- master[train == 0]
 test <- master[train == 1]
 
-train <- subset(train, select = -c(train))
-test <- subset(test, select = -c(train))
+#remove the columns adding them together
+train <- subset(train, select = -c(train, sample_id))
+test <- subset(test, select = -c(train, sample_id))
 
 fwrite(train, "./Midterm_Project/volume/data/interim/train.csv")
 fwrite(test, "./Midterm_Project/volume/data/interim/test.csv")
