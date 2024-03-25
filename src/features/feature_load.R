@@ -9,7 +9,6 @@ library(xgboost)
 train <- fread("./Stat_380_train.csv")
 test <- fread("./Stat_380_test.csv")
 covar <- fread("./covar_data.csv")
-sub <- fread("./Example_sub.csv")
 
 #prep for data to come together
 train <- train[order(age, days_sinceDose3, ic50_Omicron)]
