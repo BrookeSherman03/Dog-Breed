@@ -3,57 +3,71 @@ library(data.table)
 library(dplyr)
 library(Metrics)
 library(caret)
-library(glmnet)
+library(xgboost)
 
 #read files back in
-train <- fread("./Midterm_Project/volume/data/interim/train.csv")
-test <- fread("./Midterm_Project/volume/data/interim/test.csv")
+train <- fread("./XGboost/volume/data/interim/train.csv")
+test <- fread("./XGboost/volume/data/interim/test.csv")
+sub <- fread("./XGboost/volume/data/raw/Example_sub.csv")
 
-#store test sample_id column and drop both sample_id columns back out
+#save the train variable
 train_y <- train$ic50_Omicron
-sample_id <- test$sample_id
-train <- subset(train, select = -c(sample_id))
-test <- subset(test, select = -c(sample_id))
 
-#dummyVars operation
+#run dummyvars
 dummies <- dummyVars(ic50_Omicron ~ ., data = train)
-saveRDS(dummies, "./Midterm_Project/volume/models/dummies")
 train <- predict(dummies, newdata = train)
 test <- predict(dummies, newdata = test)
 
-#save data back in datatables
+#turn them back into data tables
 train <- data.table(train)
 test <- data.table(test)
 
-#add this column, since test does not have it
 test$dose_3mRNA1272 <- 0
 test <- test %>% relocate(dose_3mRNA1272, .after = dose_3BNT162b2)
 
-#cross validation model
-cvfit <- cv.glmnet(data.matrix(train), train_y, alpha = 1, family = "gaussian", type.measure = 'mse')
-saveRDS(cvfit, "./Midterm_Project/volume/models/cvfit")
-bestlam <- cvfit$lambda.min
+#prep for cross validation and model fitting
+dtrain <- xgb.DMatrix(data.matrix(train), label = train_y, missing = NA)
+dtest <- xgb.DMatrix(data.matrix(test), missing = NA)
 
-#create model
-gl_model <- glmnet(data.matrix(train), train_y, alpha = 1, family = "gaussian")
-saveRDS(gl_model, "./Midterm_Project/volume/models/cvfit")
+folds <- lapply(1:5, function(fold) {
+  c(((fold - 1) * 10000 + 1):(fold * 10000))
+})
 
-#predict with train and test the similarity between columns
-predtrain <- predict(gl_model, s = bestlam, newx = data.matrix(train))
-predtrain <- abs(predtrain) #numbers should not be negative, so make any negative positive
-#show train prediction mse
-sqrt(mean((train_y - predtrain)^2))
-#compare numbers as needed
-compare <- data.table(predtrain)
-compare$acttrain <- train_y
+hyper_perm_tune <- NULL
 
-#create actual prediction
-pred <- predict(gl_model, s = bestlam, newx = data.matrix(test))
-pred <- abs(pred) #numbers should not be negative, so make any negative positive
+#cross validation
+param <- list(  objective           = "reg:linear",
+                gamma               = 0.00,
+                booster             = "gbtree",
+                eval_metric         = "rmse",
+                eta                 = 0.1,
+                max_depth           = 15,
+                min_child_weight    = 5.0,
+                subsample           = 1.0,
+                colsample_bytree    = 1.0,
+                tree_method = 'hist'
+)
 
-#create submission file
-submission <- data.table(sample_id)
-submission$ic50_Omicron <- pred
+XGBm <- xgb.cv(params = param, folds = folds, nrounds = 10, missing = NA, data = dtrain, print_every_n = 1, early_stopping_rounds = 25)
 
-#write submission csv
-fwrite(submission, "./Midterm_Project/volume/data/processed/submission.csv")
+#keep best iteration
+best_ntrees <- unclass(XGBm)$best_iteration
+
+new_row <- data.table(t(param))
+
+new_row$best_ntrees <- best_ntrees
+
+test_error <- unclass(XGBm)$evaluation_log[best_ntrees,]$test_rmse_mean
+new_row$test_error <- test_error
+hyper_perm_tune <- rbind(new_row, hyper_perm_tune)
+
+#now create and fit model
+watchlist <- list(train = dtrain)
+XGBm <- xgb.train(params = param, nrounds = best_ntrees, missing = NA, data = dtrain, watchlist = watchlist, print_every_n = 1)
+
+temp_pred <- predict(XGBm, newdata = dtrain)
+rmse(train_y, temp_pred)
+
+pred <- predict(XGBm, newdata = dtest)
+sub$ic50_Omicron <- pred
+fwrite(sub, ".XGboost/volume/data/processed/sub.csv")
