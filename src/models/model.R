@@ -1,72 +1,68 @@
-#load libraries
-library(data.table)
+#load in libraries
 library(dplyr)
-library(Metrics)
+library(data.table)
 library(caret)
-library(xgboost)
+library(Metrics)
+library(Rtsne)
+library(ClusterR)
 
-#read files back in
-train <- fread("./XGboost/volume/data/interim/train.csv")
-test <- fread("./XGboost/volume/data/interim/test.csv")
-sub <- fread("./XGboost/volume/data/raw/Example_sub.csv")
+data <- fread("./Dog-Breed/volume/data/raw/data.csv")
 
-#save the train variable
-train_y <- train$ic50_Omicron
+# keep samples in a column but remove from the table
+samples <- data$id
+data$id <- NULL
 
-#run dummyvars
-dummies <- dummyVars(ic50_Omicron ~ ., data = train)
-train <- predict(dummies, newdata = train)
-test <- predict(dummies, newdata = test)
+# do a pca
+pca <- prcomp(data, scale. = TRUE) #scale it so it makes it more accurate for the rtsne
 
-#turn them back into data tables
-train <- data.table(train)
-test <- data.table(test)
+# look at the percent variance explained by each pca
+screeplot(pca)
 
-test$dose_3mRNA1272 <- 0
-test <- test %>% relocate(dose_3mRNA1272, .after = dose_3BNT162b2)
+# look at the rotation of the variables on the PCs
+pca
 
-#prep for cross validation and model fitting
-dtrain <- xgb.DMatrix(data.matrix(train), label = train_y, missing = NA)
-dtest <- xgb.DMatrix(data.matrix(test), missing = NA)
+# see the values of the scree plot in a table 
+summary(pca)
 
-folds <- lapply(1:5, function(fold) {
-  c(((fold - 1) * 10000 + 1):(fold * 10000))
-})
+# see a biplot of the first 2 PCs
+biplot(pca)
 
-hyper_perm_tune <- NULL
+# use the unclass() function to get the data in PCA space
+pca_dt <- data.table(unclass(pca)$x)
 
-#cross validation
-param <- list(  objective           = "reg:linear",
-                gamma               = 0.00,
-                booster             = "gbtree",
-                eval_metric         = "rmse",
-                eta                 = 0.1,
-                max_depth           = 15,
-                min_child_weight    = 5.0,
-                subsample           = 1.0,
-                colsample_bytree    = 1.0,
-                tree_method = 'hist'
-)
+#run rtsne with pca data
+tsne <- Rtsne(pca_dt, pca = F, perplexity = 65, check_duplicates = F)
 
-XGBm <- xgb.cv(params = param, folds = folds, nrounds = 10, missing = NA, data = dtrain, print_every_n = 1, early_stopping_rounds = 25)
+# grab out the coordinates
+tsne_dt <- data.table(tsne$Y)
 
-#keep best iteration
-best_ntrees <- unclass(XGBm)$best_iteration
+ggplot(tsne_dt,aes(x = V1,y = V2)) + geom_point()
 
-new_row <- data.table(t(param))
+#do the 4 clusters
+gmm_data <- GMM(tsne_dt[,.(V1,V2)], 4)
 
-new_row$best_ntrees <- best_ntrees
+#make the data based off of likelihood for clusters by the values being as close to 1 as possible
+l_clust <- gmm_data$Log_likelihood^10
+l_clust <- data.table(l_clust)
+net_lh <- apply(l_clust,1,FUN = function(x){sum(1/x)})
+cluster_prob <- 1/l_clust/net_lh
 
-test_error <- unclass(XGBm)$evaluation_log[best_ntrees,]$test_rmse_mean
-new_row$test_error <- test_error
-hyper_perm_tune <- rbind(new_row, hyper_perm_tune)
+tsne_dt$Cluster_1_prob <- cluster_prob$V1
+tsne_dt$Cluster_2_prob <- cluster_prob$V2
+tsne_dt$Cluster_3_prob <- cluster_prob$V3
+tsne_dt$Cluster_4_prob <- cluster_prob$V4
 
-#now create and fit model
-watchlist <- list(train = dtrain)
-XGBm <- xgb.train(params = param, nrounds = best_ntrees, missing = NA, data = dtrain, watchlist = watchlist, print_every_n = 1)
+ggplot(tsne_dt,aes(x = V1,y = V2,col = Cluster_2_prob)) + geom_point() #test out different cluster prob
 
-temp_pred <- predict(XGBm, newdata = dtrain)
-rmse(train_y, temp_pred)
+#read the ids back into the table
+cluster_prob$id <- samples
+cluster_prob <- cluster_prob %>% relocate(id)
+
+#assign the names correctly: sample_1 is breed 3, sample_5 is breed 2, sample_6 is breed 4
+names(cluster_prob) <- c("id", "breed_1", "breed_2", "breed_4", "breed_3")
+
+#create the submission file
+fwrite(cluster_prob, "submission.csv")
 
 pred <- predict(XGBm, newdata = dtest)
 sub$ic50_Omicron <- pred
